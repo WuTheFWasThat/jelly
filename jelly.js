@@ -8,6 +8,659 @@
  * DS207: Consider shorter variations of null checks
  * Full docs: https://github.com/decaffeinate/decaffeinate/blob/master/docs/suggestions.md
  */
+
+const CELL_SIZE = 48;
+
+const moveToCell = function(dom, x, y) {
+  dom.style.left = (x * CELL_SIZE) + 'px';
+  return dom.style.top = (y * CELL_SIZE) + 'px';
+};
+
+const directions = {
+  'left' : { x:-1, y: 0 },
+  'right': { x: 1, y: 0 },
+  'up'   : { x: 0, y:-1 },
+  'down' : { x: 0, y: 1 },
+};
+
+const style_colors = {
+  'black' : 'hsl(0,     0%,  0%)',
+  'red'   : 'hsl(0,   100%, 75%)',
+  'green' : 'hsl(120, 100%, 45%)',
+  'blue'  : 'hsl(216, 100%, 70%)',
+  'yellow': 'hsl(60,  100%, 50%)'
+};
+
+class Stage {
+  constructor(dom, map) {
+    let anchors, growers;
+    this.dom = dom;
+    this.jellies = [];
+    this.history = [];
+    this.anchored_cells = [];
+    this.growers = [];
+    this.delayed_anchors = [];
+    if (map[0] instanceof Array) {
+      growers = map[2];
+      anchors = map[1];
+      map = map[0];
+    }
+    this.num_monochromatic_blocks = 0;
+    this.num_colors = 0;
+    this.loadMap(map);
+    if (anchors) { this.placeAnchors(anchors, growers); }
+    if (growers) { this.placeGrowers(growers); }
+    this.current_cell = null;
+
+    // Capture and swallow all click events during animations.
+    this.busy = false;
+    const maybeSwallowEvent = e => {
+      e.preventDefault();
+      if (this.busy) { return e.stopPropagation(); }
+    };
+    for (let event of ['contextmenu', 'click', 'touchstart', 'touchmove']) {
+      this.dom.addEventListener(event, maybeSwallowEvent, true);
+    }
+    document.addEventListener('keydown', e => {
+      if (this.busy) { return; }
+      switch (e.keyCode) {
+        case 37: return this.trySlide(this.current_cell, -1);
+        case 39: return this.trySlide(this.current_cell, 1);
+      }
+    });
+
+    this.checkForMerges();
+  }
+
+  loadMap(map) {
+    const table = document.createElement('table');
+    this.dom.appendChild(table);
+    const colors = {};
+    this.cells = (() => {
+      const result = [];
+      for (var y = 0, end = map.length, asc = 0 <= end; asc ? y < end : y > end; asc ? y++ : y--) {
+        var row = map[y].split('');
+        var tr = document.createElement('tr');
+        table.appendChild(tr);
+        result.push((() => {
+          const result1 = [];
+          for (let x = 0, end1 = row.length, asc1 = 0 <= end1; asc1 ? x < end1 : x > end1; asc1 ? x++ : x--) {
+            let color = null;
+            let classname = 'transparent';
+            let cell = null;
+            const td = document.createElement('td');
+            switch (row[x]) {
+              case 'x':
+                classname = 'cell wall';
+                cell = new Wall(td);
+                break;
+              case 'r': color = 'red'; break;
+              case 'g': color = 'green'; break;
+              case 'b': color = 'blue'; break;
+              case 'y': color = 'yellow'; break;
+              case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
+                color = `black${row[x]}`;
+                break;
+            }
+            td.className = classname;
+            tr.appendChild(td);
+            if (color) {
+              cell = new JellyCell(color);
+              const jelly = new Jelly(this, cell, x, y);
+              this.dom.appendChild(jelly.dom);
+              this.jellies.push(jelly);
+              this.num_monochromatic_blocks += 1;
+              if (!(color in colors)) { this.num_colors +=1; }
+              colors[color] = 1;
+            }
+            result1.push(cell);
+          }
+          return result1;
+        })());
+      }
+      return result;
+    })();
+    return this.addBorders();
+  }
+
+  placeAnchors(anchors, growers) {
+    const style = {
+      'left' : [ 'leftarrow' , 'borderRightColor'  ],
+      'right': [ 'rightarrow', 'borderLeftColor'   ],
+      'up'   : [ 'uparrow'   , 'borderBottomColor' ],
+      'down' : [ 'downarrow' , 'borderTopColor'    ],
+    };
+
+    for (let anchor of Array.from(anchors)) {
+      const dx = directions[anchor.dir].x;
+      const dy = directions[anchor.dir].y;
+      const classname = style[anchor.dir][0];
+      const property = style[anchor.dir][1];
+
+      const me = this.cells[anchor.y][anchor.x];
+      const other = this.cells[anchor.y + dy][anchor.x + dx];
+      let arrow_color = 'black';
+
+      // We allow yet-to-be-grown jellies to be anchored in advance,
+      // and we create the visual element, but there is nothing to anchor yet,
+      // so we put it in a special place for future reference.
+      if ((me === null) || (anchor.delayed)) {
+        this.delayed_anchors.push([anchor, other]);
+
+        // We use the growers array to figure out the color of the anchor.
+        for (let grower of Array.from(growers)) {
+          if ((grower.x === (anchor.x + dx)) && (grower.y === (anchor.y + dy))) {
+            arrow_color = grower.color;
+            break;
+          }
+        }
+      } else {
+        // Save the cells we anchored for undo functionality
+        this.anchored_cells.push([me, anchor.dir]);
+        arrow_color = me.color;
+        me.mergeWith(other, anchor.dir);
+      }
+
+      // Create the overlapping anchoring triangle.
+      const arrow = document.createElement('div');
+      arrow.style[property] = style_colors[arrow_color];
+      arrow.className = classname;
+      this.addElement(arrow, other);
+    }
+
+    this.jellies = (Array.from(this.jellies).filter((jelly) => jelly.cells));
+  }
+
+  placeGrowers(growers) {
+    const style = {
+      'left' : [ 'leftgrower' , 'borderLeftColor'   ],
+      'right': [ 'rightgrower', 'borderRightColor'  ],
+      'up'   : [ 'upgrower'   , 'borderTopColor'    ],
+    };
+
+    for (let grower of Array.from(growers)) {
+      const classname = style[grower.dir][0];
+      const property = style[grower.dir][1];
+
+      const me = this.cells[grower.y][grower.x];
+
+      // Create the visual representation of a grower
+      const grower_div = document.createElement('div');
+      grower_div.style[property] = style_colors[grower.color];
+      grower_div.className = classname;
+      this.addElement(grower_div, me);
+
+      this.growers.push([me, grower, grower_div]);
+
+      // We treat each grower as a future block,
+      // requiring it to be activated for level completion.
+      this.num_monochromatic_blocks += 1;
+    }
+
+  }
+
+  // Adds overlapping visual elements to the table;
+  // given that now we can have both anchor and grower in the same cell,
+  // and to fix the way firefox displays absolute div in td cell,
+  // we don't add the elements to the dom directly, but make sure we have
+  // a container div with position relative, and add our elements to it.
+  addElement(element, cell) {
+    if (cell.dom.firstChild) {
+      cell.dom.firstChild.appendChild(element);
+    } else {
+      const div_container = document.createElement('div');
+      div_container.style.position = 'relative';
+      div_container.style.height = '100%';
+      div_container.style.width = '100%';
+      div_container.appendChild(element);
+      cell.dom.appendChild(div_container);
+    }
+  }
+
+
+  addBorders() {
+    for (let y = 0, end = this.cells.length, asc = 0 <= end; asc ? y < end : y > end; asc ? y++ : y--) {
+      for (let x = 0, end1 = this.cells[0].length, asc1 = 0 <= end1; asc1 ? x < end1 : x > end1; asc1 ? x++ : x--) {
+        const cell = this.cells[y][x];
+        if (!(cell instanceof Wall)) { continue; }
+        const border = 'solid 1px #777';
+        const edges = [
+          ['borderBottom',  0,  1],
+          ['borderTop',     0, -1],
+          ['borderLeft',   -1,  0],
+          ['borderRight',   1,  0],
+        ];
+        for (let [attr, dx, dy] of Array.from(edges)) {
+          var middle, middle1;
+          if (!(0 <= ((middle = y+dy)) && middle < this.cells.length)) { continue; }
+          if (!(0 <= ((middle1 = x+dx)) && middle1 < this.cells[0].length)) { continue; }
+          const other = this.cells[y+dy][x+dx];
+          if (!(other instanceof Wall)) { cell.dom.style[attr] = border; }
+        }
+      }
+    }
+  }
+
+  waitForAnimation(cb) {
+    let name;
+    const names = ['transitionend', 'webkitTransitionEnd'];
+    var end = () => {
+      for (name of Array.from(names)) { this.dom.removeEventListener(name, end); }
+      // Wait one call stack before continuing.  This is necessary if there
+      // are multiple pending end transition events (multiple jellies moving);
+      // we want to wait for them all here and not accidentally catch them
+      // in a subsequent waitForAnimation.
+      return setTimeout(cb, 0);
+    };
+    for (name of Array.from(names)) { this.dom.addEventListener(name, end); }
+  }
+
+  trySlide(jelly, dir) {
+    if (!jelly) { return; }
+    const jellies = [jelly];
+    if (this.checkFilled(jellies, dir, 0)) { return; }
+    this.busy = true;
+    this.saveForUndo();
+    this.move(jellies, dir, 0);
+    return this.waitForAnimation(() => {
+      return this.checkFall(() => {
+        this.checkForMerges();
+        return this.checkForGrows();
+      });
+    });
+  }
+
+  move(jellies, dx, dy) {
+    let cell, x, y;
+    for (var jelly of Array.from(jellies)) {
+      for ([x, y, cell] of Array.from(jelly.cellCoords())) {
+        this.cells[y][x] = null;
+      }
+    }
+    for (jelly of Array.from(jellies)) {
+      jelly.updatePosition(jelly.x+dx, jelly.y+dy);
+    }
+    for (jelly of Array.from(jellies)) {
+      for ([x, y, cell] of Array.from(jelly.cellCoords())) {
+        this.cells[y][x] = cell;
+      }
+    }
+  }
+
+  checkFilled(jellies, dx, dy) {
+    let done = false;
+    while (!done) {
+      done = true;
+      for (let jelly of Array.from(jellies)) {
+        if (jelly.immovable) { return true; }
+        for (let [x, y, cell] of Array.from(jelly.cellCoords())) {
+          const next = this.cells[y + dy][x + dx];
+          if (!next) { continue; }           // empty space
+          if (!next.jelly) { return true; }  // wall
+          if (Array.from(jellies).includes(next.jelly)) { continue; }
+          jellies.push(next.jelly);
+          done = false;
+          break;
+        }
+      }
+    }
+    return false;
+  }
+
+  checkFall(cb) {
+    let moved = false;
+    let try_again = true;
+    while (try_again) {
+      try_again = false;
+      for (let jelly of Array.from(this.jellies)) {
+        const jellyset = [jelly];
+        if (!this.checkFilled(jellyset, 0, 1)) {
+          this.move(jellyset, 0, 1);
+          try_again = true;
+          moved = true;
+        }
+      }
+    }
+    if (moved) {
+      this.waitForAnimation(cb);
+    } else {
+      cb();
+    }
+  }
+
+  checkForMerges() {
+    let merged = false;
+    while (this.doOneMerge()) {
+      merged = true;
+    }
+    if (merged) { this.checkForCompletion(); }
+  }
+
+  checkForCompletion() {
+    if (this.num_monochromatic_blocks <= this.num_colors) {
+      alert("Congratulations! Level completed.");
+    }
+  }
+
+  checkForGrows() {
+    if (this.doOneGrow()) {
+      setTimeout(() => {
+        return this.checkForGrows();
+      }
+      , 200);
+    } else {
+      this.busy = false;
+    }
+  }
+
+  doOneGrow() {
+    let jelly;
+    for (let [cell, grower, grower_div] of Array.from(this.growers)) {
+      var new_x, new_y;
+      var i = (i+1) || 0;
+      let dx = directions[grower.dir].x;
+      let dy = directions[grower.dir].y;
+      if (cell instanceof Wall) {
+        new_y = grower.y + dy;
+        new_x = grower.x + dx;
+      } else {
+        new_y = cell.y + cell.jelly.y + dy;
+        new_x = cell.x + cell.jelly.x + dx;
+      }
+      const activator = this.cells[new_y][new_x];
+
+      if (!(activator instanceof JellyCell)) { continue; }
+      if (activator.color !== grower.color) { continue; }
+      let jellies = [activator.jelly];
+      if (this.checkFilled(jellies, dx, dy)) {
+        if (cell instanceof Wall) { continue; }
+        // If our grower is not inside a wall, we can activate the jelly
+        // not only by moving the activator away from it, but the other way
+        // around, by moving the jelly with the grower away (level 31).
+        dx = -dx;
+        dy = -dy;
+        jellies = [activator.jelly];
+        if (this.checkFilled(jellies, dx, dy)) { continue; }
+        // Remove the activator itself from the list.
+        jellies.splice(0,1);
+        new_x += dx;
+        new_y += dy;
+      }
+
+      this.move(jellies, dx, dy);
+      const new_cell = new JellyCell(grower.color);
+      jelly = new Jelly(this, new_cell, new_x, new_y);
+      this.cells[new_y][new_x] = new_cell;
+      this.dom.appendChild(jelly.dom);
+      this.jellies.push(jelly);
+      this.growers.splice(i, 1);
+      cell.dom.firstChild.removeChild(grower_div);
+
+      this.checkGrownAnchored(new_cell);
+
+      this.jellies = ((() => {
+        const result = [];
+        for (jelly of Array.from(this.jellies)) {           if (jelly.cells) {
+            result.push(jelly);
+          }
+        }
+        return result;
+      })());
+      this.checkForMerges();
+      return true;
+    }
+    return false;
+  }
+
+  checkGrownAnchored(cell) {
+    for (let [anchor, other] of Array.from(this.delayed_anchors)) {
+      var check_x, check_y;
+      var i = (i+1) || 0;
+
+      if (other instanceof Wall) {
+        check_x = anchor.x;
+        check_y = anchor.y;
+      } else {
+        check_x = (other.x + other.jelly.x) - directions[anchor.dir].x;
+        check_y = (other.y + other.jelly.y) - directions[anchor.dir].y;
+      }
+
+      if ((check_x === (cell.x + cell.jelly.x)) &&
+         (check_y === (cell.y + cell.jelly.y))) {
+        cell.mergeWith(other, anchor.dir);
+        this.delayed_anchors.splice(i, 1);
+        this.anchored_cells.push([cell, anchor.dir]);
+        break;
+      }
+    }
+  }
+
+  doOneMerge() {
+    for (let jelly of Array.from(this.jellies)) {
+      for (let [x, y, cell] of Array.from(jelly.cellCoords())) {
+        // Only look right and down; left and up are handled by that side
+        // itself looking right and down.
+        for (let [dx, dy, dir] of [[1, 0, 'right'], [0, 1, 'down']]) {
+          var other = this.cells[y + dy][x + dx];
+          if (!other || !(other instanceof JellyCell)) { continue; }
+          if (cell[`merged${dir}`]) { continue; }
+          if (other.color !== cell.color) { continue; }
+          if (jelly !== other.jelly) {
+            this.jellies = this.jellies.filter(j => j !== other.jelly);
+          }
+          if (cell.color_master !== other.color_master) {
+            this.num_monochromatic_blocks -= 1;
+          }
+          cell.mergeWith(other, dir);
+          cell[`merged${dir}`] = true;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Undo functionality is implemented via deconstruction of the available
+  // data structures to get the initial configuration as listed in [levels].
+  saveForUndo() {
+    const map     = this.saveForUndoMap();
+    const anchors = this.saveForUndoAnchors();
+    const growers = this.saveForUndoGrowers();
+
+    this.history.push([map, anchors, growers]);
+  }
+
+
+  saveForUndoMap() {
+    const map = [];
+    // We run over all the cells and revert it to
+    // the original textual representation.
+    for (let y = 0, end = this.cells.length, asc = 0 <= end; asc ? y < end : y > end; asc ? y++ : y--) {
+      let row = "";
+      for (let x = 0, end1 = this.cells[0].length, asc1 = 0 <= end1; asc1 ? x < end1 : x > end1; asc1 ? x++ : x--) {
+        const cell = this.cells[y][x];
+        if (cell instanceof Wall) { row += "x"; }
+        if (cell === null) { row += " "; }
+        if (cell instanceof JellyCell) {
+          switch (cell.color) {
+            case "red": row += "r"; break;
+            case "green": row += "g"; break;
+            case "blue": row += "b"; break;
+            case "yellow": row += "y"; break;
+            case "black0":case "black1":case "black2":case "black3":case "black4":case "black5":case "black6":case "black7":case "black8":case "black9":
+              row += cell.color.slice(5);
+              break;
+          }
+        }
+      }
+      map.push(row);
+    }
+    return map;
+  }
+
+  saveForUndoAnchors() {
+    let anchor, other;
+    const anchors = [];
+    // Add anchors from the cells they were attached to
+    for (let [anchored_cell, direction] of Array.from(this.anchored_cells)) {
+      anchor = {
+        'x': anchored_cell.x + anchored_cell.jelly.x,
+        'y': anchored_cell.y + anchored_cell.jelly.y,
+        'dir': direction
+      };
+      anchors.push(anchor);
+    }
+
+    // Add delayed anchors that aren't attached yet
+    for ([anchor, other] of Array.from(this.delayed_anchors)) {
+      let new_anchor = anchor;
+      if (!(other instanceof Wall)) {
+        new_anchor = {
+          'x': (other.x + other.jelly.x) - directions[anchor.dir].x,
+          'y': (other.y + other.jelly.y) - directions[anchor.dir].y,
+          'dir': anchor.dir
+        };
+      }
+      new_anchor.delayed = true;
+      anchors.push(new_anchor);
+    }
+    return anchors;
+  }
+
+  saveForUndoGrowers() {
+    const growers = [];
+    // Add growers that weren't activated yet,
+    // otherwise they are simple cells already listed
+    for (let [cell, grower, grower_div] of Array.from(this.growers)) {
+      let new_y = grower.y;
+      let new_x = grower.x;
+      if (!(cell instanceof Wall)) {
+        new_y = cell.y + cell.jelly.y;
+        new_x = cell.x + cell.jelly.x;
+      }
+      const new_grower = {
+        'x':new_x,
+        'y':new_y,
+        'dir':grower.dir,
+        'color':grower.color
+      };
+      growers.push(new_grower);
+    }
+    return growers;
+  }
+}
+
+class Wall {
+  constructor(dom) {
+    this.dom = dom;
+  }
+}
+
+class JellyCell {
+  constructor(color) {
+    this.color = color;
+    this.dom = document.createElement('div');
+    this.dom.className = `cell jelly ${color}`;
+    this.x = 0;
+    this.y = 0;
+    this.color_master = this;
+    this.color_mates = [this];
+  }
+
+  mergeWith(other, dir) {
+    const borders = {
+      'left':  ['borderLeft',   'borderRight'],
+      'right': ['borderRight',  'borderLeft'],
+      'up':    ['borderTop',    'borderBottom'],
+      'down':  ['borderBottom', 'borderTop']
+    };
+    // Remove internal borders, whether merging with other jelly or wall.
+    this.dom.style[borders[dir][0]] = 'none';
+    other.dom.style[borders[dir][1]] = 'none';
+
+    // If merging with wall, jelly becomes immovable.
+    if (other instanceof Wall) { this.jelly.immovable = true; }
+
+    // If merging with jelly, unify the jellies and color mates' lists.
+    if (other instanceof JellyCell && (this.color === other.color) && (this.color_master !== other.color_master)) {
+      const other_master = other.color_master;
+      for (let cell of Array.from(other_master.color_mates)) {
+        cell.color_master = this.color_master;
+      }
+      this.color_master.color_mates =
+        this.color_master.color_mates.concat(other_master.color_mates);
+    }
+    if (other instanceof JellyCell && (this.jelly !== other.jelly)) {
+      return this.jelly.merge(other.jelly);
+    }
+  }
+}
+
+class Jelly {
+  constructor(stage, cell, x, y) {
+    this.x = x;
+    this.y = y;
+    this.dom = document.createElement('div');
+    this.updatePosition(this.x, this.y);
+    this.dom.className = 'cell jellybox';
+    cell.jelly = this;
+    this.cells = [cell];
+    this.dom.appendChild(cell.dom);
+
+    this.dom.addEventListener('contextmenu', e => {
+      return stage.trySlide(this, 1);
+    });
+    this.dom.addEventListener('click', e => {
+      return stage.trySlide(this, -1);
+    });
+
+    this.dom.addEventListener('touchstart', e => {
+      return this.start = e.touches[0].pageX;
+    });
+    this.dom.addEventListener('touchmove', e => {
+      const dx = e.touches[0].pageX - this.start;
+      if (Math.abs(dx) > 10) {
+        let left;
+        const dir = (left = dx > 0) != null ? left : {1 : -1};
+        return stage.trySlide(this, dir);
+      }
+    });
+    this.dom.addEventListener('mouseover', e => {
+      return stage.current_cell = this;
+    });
+    this.immovable = false;
+  }
+
+  cellCoords() {
+    return Array.from(this.cells).map((cell) => [this.x + cell.x, this.y + cell.y, cell]);
+  }
+
+  updatePosition(x, y) {
+    this.x = x;
+    this.y = y;
+    return moveToCell(this.dom, this.x, this.y);
+  }
+
+  merge(other) {
+    // Reposition other's cells as children of this jelly.
+    const dx = other.x - this.x;
+    const dy = other.y - this.y;
+    for (let cell of Array.from(other.cells)) {
+      this.cells.push(cell);
+      cell.x += dx;
+      cell.y += dy;
+      cell.jelly = this;
+      moveToCell(cell.dom, cell.x, cell.y);
+      this.dom.appendChild(cell.dom);
+    }
+
+    if (other.immovable) { this.immovable = true; }
+    // Delete references from/to other.
+    other.cells = null;
+    other.dom.parentNode.removeChild(other.dom);
+  }
+}
+
 const levels = [
   // Level 1
   [ "xxxxxxxxxxxxxx",
@@ -716,652 +1369,6 @@ const levels = [
 
   ];
 
-const CELL_SIZE = 48;
-
-const moveToCell = function(dom, x, y) {
-  dom.style.left = (x * CELL_SIZE) + 'px';
-  return dom.style.top = (y * CELL_SIZE) + 'px';
-};
-
-const directions = {
-  'left' : { x:-1, y: 0 },
-  'right': { x: 1, y: 0 },
-  'up'   : { x: 0, y:-1 },
-  'down' : { x: 0, y: 1 },
-};
-
-const style_colors = {
-  'black' : 'hsl(0,     0%,  0%)',
-  'red'   : 'hsl(0,   100%, 75%)',
-  'green' : 'hsl(120, 100%, 45%)',
-  'blue'  : 'hsl(216, 100%, 70%)',
-  'yellow': 'hsl(60,  100%, 50%)'
-};
-
-class Stage {
-  constructor(dom, map) {
-    let anchors, growers;
-    this.dom = dom;
-    this.jellies = [];
-    this.history = [];
-    this.anchored_cells = [];
-    this.growers = [];
-    this.delayed_anchors = [];
-    if (map[0] instanceof Array) {
-      growers = map[2];
-      anchors = map[1];
-      map = map[0];
-    }
-    this.num_monochromatic_blocks = 0;
-    this.num_colors = 0;
-    this.loadMap(map);
-    if (anchors) { this.placeAnchors(anchors, growers); }
-    if (growers) { this.placeGrowers(growers); }
-    this.current_cell = null;
-
-    // Capture and swallow all click events during animations.
-    this.busy = false;
-    const maybeSwallowEvent = e => {
-      e.preventDefault();
-      if (this.busy) { return e.stopPropagation(); }
-    };
-    for (let event of ['contextmenu', 'click', 'touchstart', 'touchmove']) {
-      this.dom.addEventListener(event, maybeSwallowEvent, true);
-    }
-    document.addEventListener('keydown', e => {
-      if (this.busy) { return; }
-      switch (e.keyCode) {
-        case 37: return this.trySlide(this.current_cell, -1);
-        case 39: return this.trySlide(this.current_cell, 1);
-      }
-    });
-
-    this.checkForMerges();
-  }
-
-  loadMap(map) {
-    const table = document.createElement('table');
-    this.dom.appendChild(table);
-    const colors = {};
-    this.cells = (() => {
-      const result = [];
-      for (var y = 0, end = map.length, asc = 0 <= end; asc ? y < end : y > end; asc ? y++ : y--) {
-        var row = map[y].split('');
-        var tr = document.createElement('tr');
-        table.appendChild(tr);
-        result.push((() => {
-          const result1 = [];
-          for (let x = 0, end1 = row.length, asc1 = 0 <= end1; asc1 ? x < end1 : x > end1; asc1 ? x++ : x--) {
-            let color = null;
-            let classname = 'transparent';
-            let cell = null;
-            const td = document.createElement('td');
-            switch (row[x]) {
-              case 'x':
-                classname = 'cell wall';
-                cell = new Wall(td);
-                break;
-              case 'r': color = 'red'; break;
-              case 'g': color = 'green'; break;
-              case 'b': color = 'blue'; break;
-              case 'y': color = 'yellow'; break;
-              case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
-                color = `black${row[x]}`;
-                break;
-            }
-            td.className = classname;
-            tr.appendChild(td);
-            if (color) {
-              cell = new JellyCell(color);
-              const jelly = new Jelly(this, cell, x, y);
-              this.dom.appendChild(jelly.dom);
-              this.jellies.push(jelly);
-              this.num_monochromatic_blocks += 1;
-              if (!(color in colors)) { this.num_colors +=1; }
-              colors[color] = 1;
-            }
-            result1.push(cell);
-          }
-          return result1;
-        })());
-      }
-      return result;
-    })();
-    return this.addBorders();
-  }
-
-  placeAnchors(anchors, growers) {
-    const style = {
-      'left' : [ 'leftarrow' , 'borderRightColor'  ],
-      'right': [ 'rightarrow', 'borderLeftColor'   ],
-      'up'   : [ 'uparrow'   , 'borderBottomColor' ],
-      'down' : [ 'downarrow' , 'borderTopColor'    ],
-    };
-
-    for (let anchor of Array.from(anchors)) {
-      const dx = directions[anchor.dir].x;
-      const dy = directions[anchor.dir].y;
-      const classname = style[anchor.dir][0];
-      const property = style[anchor.dir][1];
-
-      const me = this.cells[anchor.y][anchor.x];
-      const other = this.cells[anchor.y + dy][anchor.x + dx];
-      let arrow_color = 'black';
-
-      // We allow yet-to-be-grown jellies to be anchored in advance,
-      // and we create the visual element, but there is nothing to anchor yet,
-      // so we put it in a special place for future reference.
-      if ((me === null) || (anchor.delayed)) {
-        this.delayed_anchors.push([anchor, other]);
-
-        // We use the growers array to figure out the color of the anchor.
-        for (let grower of Array.from(growers)) {
-          if ((grower.x === (anchor.x + dx)) && (grower.y === (anchor.y + dy))) {
-            arrow_color = grower.color;
-            break;
-          }
-        }
-      } else {
-        // Save the cells we anchored for undo functionality
-        this.anchored_cells.push([me, anchor.dir]);
-        arrow_color = me.color;
-        me.mergeWith(other, anchor.dir);
-      }
-
-      // Create the overlapping anchoring triangle.
-      const arrow = document.createElement('div');
-      arrow.style[property] = style_colors[arrow_color];
-      arrow.className = classname;
-      this.addElement(arrow, other);
-    }
-
-    this.jellies = (Array.from(this.jellies).filter((jelly) => jelly.cells));
-  }
-
-  placeGrowers(growers) {
-    const style = {
-      'left' : [ 'leftgrower' , 'borderLeftColor'   ],
-      'right': [ 'rightgrower', 'borderRightColor'  ],
-      'up'   : [ 'upgrower'   , 'borderTopColor'    ],
-    };
-
-    for (let grower of Array.from(growers)) {
-      const classname = style[grower.dir][0];
-      const property = style[grower.dir][1];
-
-      const me = this.cells[grower.y][grower.x];
-
-      // Create the visual representation of a grower
-      const grower_div = document.createElement('div');
-      grower_div.style[property] = style_colors[grower.color];
-      grower_div.className = classname;
-      this.addElement(grower_div, me);
-
-      this.growers.push([me, grower, grower_div]);
-
-      // We treat each grower as a future block,
-      // requiring it to be activated for level completion.
-      this.num_monochromatic_blocks += 1;
-    }
-
-  }
-
-  // Adds overlapping visual elements to the table;
-  // given that now we can have both anchor and grower in the same cell,
-  // and to fix the way firefox displays absolute div in td cell,
-  // we don't add the elements to the dom directly, but make sure we have
-  // a container div with position relative, and add our elements to it.
-  addElement(element, cell) {
-    if (cell.dom.firstChild) {
-      cell.dom.firstChild.appendChild(element);
-    } else {
-      const div_container = document.createElement('div');
-      div_container.style.position = 'relative';
-      div_container.style.height = '100%';
-      div_container.style.width = '100%';
-      div_container.appendChild(element);
-      cell.dom.appendChild(div_container);
-    }
-  }
-
-
-  addBorders() {
-    for (let y = 0, end = this.cells.length, asc = 0 <= end; asc ? y < end : y > end; asc ? y++ : y--) {
-      for (let x = 0, end1 = this.cells[0].length, asc1 = 0 <= end1; asc1 ? x < end1 : x > end1; asc1 ? x++ : x--) {
-        const cell = this.cells[y][x];
-        if (!(cell instanceof Wall)) { continue; }
-        const border = 'solid 1px #777';
-        const edges = [
-          ['borderBottom',  0,  1],
-          ['borderTop',     0, -1],
-          ['borderLeft',   -1,  0],
-          ['borderRight',   1,  0],
-        ];
-        for (let [attr, dx, dy] of Array.from(edges)) {
-          var middle, middle1;
-          if (!(0 <= ((middle = y+dy)) && middle < this.cells.length)) { continue; }
-          if (!(0 <= ((middle1 = x+dx)) && middle1 < this.cells[0].length)) { continue; }
-          const other = this.cells[y+dy][x+dx];
-          if (!(other instanceof Wall)) { cell.dom.style[attr] = border; }
-        }
-      }
-    }
-  }
-
-  waitForAnimation(cb) {
-    let name;
-    const names = ['transitionend', 'webkitTransitionEnd'];
-    var end = () => {
-      for (name of Array.from(names)) { this.dom.removeEventListener(name, end); }
-      // Wait one call stack before continuing.  This is necessary if there
-      // are multiple pending end transition events (multiple jellies moving);
-      // we want to wait for them all here and not accidentally catch them
-      // in a subsequent waitForAnimation.
-      return setTimeout(cb, 0);
-    };
-    for (name of Array.from(names)) { this.dom.addEventListener(name, end); }
-  }
-
-  trySlide(jelly, dir) {
-    if (!jelly) { return; }
-    const jellies = [jelly];
-    if (this.checkFilled(jellies, dir, 0)) { return; }
-    this.busy = true;
-    this.saveForUndo();
-    this.move(jellies, dir, 0);
-    return this.waitForAnimation(() => {
-      return this.checkFall(() => {
-        this.checkForMerges();
-        return this.checkForGrows();
-      });
-    });
-  }
-
-  move(jellies, dx, dy) {
-    let cell, x, y;
-    for (var jelly of Array.from(jellies)) { for ([x, y, cell] of Array.from(jelly.cellCoords())) { this.cells[y][x] = null; } }
-    for (jelly of Array.from(jellies)) { jelly.updatePosition(jelly.x+dx, jelly.y+dy); }
-    for (jelly of Array.from(jellies)) { for ([x, y, cell] of Array.from(jelly.cellCoords())) { this.cells[y][x] = cell; } }
-  }
-
-  checkFilled(jellies, dx, dy) {
-    let done = false;
-    while (!done) {
-      done = true;
-      for (let jelly of Array.from(jellies)) {
-        if (jelly.immovable) { return true; }
-        for (let [x, y, cell] of Array.from(jelly.cellCoords())) {
-          const next = this.cells[y + dy][x + dx];
-          if (!next) { continue; }           // empty space
-          if (!next.jelly) { return true; }  // wall
-          if (Array.from(jellies).includes(next.jelly)) { continue; }
-          jellies.push(next.jelly);
-          done = false;
-          break;
-        }
-      }
-    }
-    return false;
-  }
-
-  checkFall(cb) {
-    let moved = false;
-    let try_again = true;
-    while (try_again) {
-      try_again = false;
-      for (let jelly of Array.from(this.jellies)) {
-        const jellyset = [jelly];
-        if (!this.checkFilled(jellyset, 0, 1)) {
-          this.move(jellyset, 0, 1);
-          try_again = true;
-          moved = true;
-        }
-      }
-    }
-    if (moved) {
-      this.waitForAnimation(cb);
-    } else {
-      cb();
-    }
-  }
-
-  checkForMerges() {
-    let merged = false;
-    while (this.doOneMerge()) {
-      merged = true;
-    }
-    if (merged) { this.checkForCompletion(); }
-  }
-
-  checkForCompletion() {
-    if (this.num_monochromatic_blocks <= this.num_colors) {
-      alert("Congratulations! Level completed.");
-    }
-  }
-
-  checkForGrows() {
-    if (this.doOneGrow()) {
-      setTimeout(() => {
-        return this.checkForGrows();
-      }
-      , 200);
-    } else {
-      this.busy = false;
-    }
-  }
-
-  doOneGrow() {
-    let jelly;
-    for (let [cell, grower, grower_div] of Array.from(this.growers)) {
-      var new_x, new_y;
-      var i = (i+1) || 0;
-      let dx = directions[grower.dir].x;
-      let dy = directions[grower.dir].y;
-      if (cell instanceof Wall) {
-        new_y = grower.y + dy;
-        new_x = grower.x + dx;
-      } else {
-        new_y = cell.y + cell.jelly.y + dy;
-        new_x = cell.x + cell.jelly.x + dx;
-      }
-      const activator = this.cells[new_y][new_x];
-
-      if (!(activator instanceof JellyCell)) { continue; }
-      if (activator.color !== grower.color) { continue; }
-      let jellies = [activator.jelly];
-      if (this.checkFilled(jellies, dx, dy)) {
-        if (cell instanceof Wall) { continue; }
-        // If our grower is not inside a wall, we can activate the jelly
-        // not only by moving the activator away from it, but the other way
-        // around, by moving the jelly with the grower away (level 31).
-        dx = -dx;
-        dy = -dy;
-        jellies = [activator.jelly];
-        if (this.checkFilled(jellies, dx, dy)) { continue; }
-        // Remove the activator itself from the list.
-        jellies.splice(0,1);
-        new_x += dx;
-        new_y += dy;
-      }
-
-      this.move(jellies, dx, dy);
-      const new_cell = new JellyCell(grower.color);
-      jelly = new Jelly(this, new_cell, new_x, new_y);
-      this.cells[new_y][new_x] = new_cell;
-      this.dom.appendChild(jelly.dom);
-      this.jellies.push(jelly);
-      this.growers.splice(i, 1);
-      cell.dom.firstChild.removeChild(grower_div);
-
-      this.checkGrownAnchored(new_cell);
-
-      this.jellies = ((() => {
-        const result = [];
-        for (jelly of Array.from(this.jellies)) {           if (jelly.cells) {
-            result.push(jelly);
-          }
-        }
-        return result;
-      })());
-      this.checkForMerges();
-      return true;
-    }
-    return false;
-  }
-
-  checkGrownAnchored(cell) {
-    for (let [anchor, other] of Array.from(this.delayed_anchors)) {
-      var check_x, check_y;
-      var i = (i+1) || 0;
-
-      if (other instanceof Wall) {
-        check_x = anchor.x;
-        check_y = anchor.y;
-      } else {
-        check_x = (other.x + other.jelly.x) - directions[anchor.dir].x;
-        check_y = (other.y + other.jelly.y) - directions[anchor.dir].y;
-      }
-
-      if ((check_x === (cell.x + cell.jelly.x)) &&
-         (check_y === (cell.y + cell.jelly.y))) {
-        cell.mergeWith(other, anchor.dir);
-        this.delayed_anchors.splice(i, 1);
-        this.anchored_cells.push([cell, anchor.dir]);
-        break;
-      }
-    }
-  }
-
-  doOneMerge() {
-    for (let jelly of Array.from(this.jellies)) {
-      for (let [x, y, cell] of Array.from(jelly.cellCoords())) {
-        // Only look right and down; left and up are handled by that side
-        // itself looking right and down.
-        for (let [dx, dy, dir] of [[1, 0, 'right'], [0, 1, 'down']]) {
-          var other = this.cells[y + dy][x + dx];
-          if (!other || !(other instanceof JellyCell)) { continue; }
-          if (cell[`merged${dir}`]) { continue; }
-          if (other.color !== cell.color) { continue; }
-          if (jelly !== other.jelly) {
-            this.jellies = this.jellies.filter(j => j !== other.jelly);
-          }
-          if (cell.color_master !== other.color_master) {
-            this.num_monochromatic_blocks -= 1;
-          }
-          cell.mergeWith(other, dir);
-          cell[`merged${dir}`] = true;
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  // Undo functionality is implemented via deconstruction of the available
-  // data structures to get the initial configuration as listed in [levels].
-  saveForUndo() {
-    const map     = this.saveForUndoMap();
-    const anchors = this.saveForUndoAnchors();
-    const growers = this.saveForUndoGrowers();
-
-    this.history.push([map, anchors, growers]);
-
-    // The original game limits undo to last 3 moves, so replicate that
-    // if @history.length > 3
-    //   [abc...,x,y,z] = @history
-    //   @history = [x,y,z]
-  }
-
-
-  saveForUndoMap() {
-    const map = [];
-    // We run over all the cells and revert it to
-    // the original textual representation.
-    for (let y = 0, end = this.cells.length, asc = 0 <= end; asc ? y < end : y > end; asc ? y++ : y--) {
-      let row = "";
-      for (let x = 0, end1 = this.cells[0].length, asc1 = 0 <= end1; asc1 ? x < end1 : x > end1; asc1 ? x++ : x--) {
-        const cell = this.cells[y][x];
-        if (cell instanceof Wall) { row += "x"; }
-        if (cell === null) { row += " "; }
-        if (cell instanceof JellyCell) {
-          switch (cell.color) {
-            case "red": row += "r"; break;
-            case "green": row += "g"; break;
-            case "blue": row += "b"; break;
-            case "yellow": row += "y"; break;
-            case "black0":case "black1":case "black2":case "black3":case "black4":case "black5":case "black6":case "black7":case "black8":case "black9":
-              row += cell.color.slice(5);
-              break;
-          }
-        }
-      }
-      map.push(row);
-    }
-    return map;
-  }
-
-  saveForUndoAnchors() {
-    let anchor, other;
-    const anchors = [];
-    // Add anchors from the cells they were attached to
-    for (let [anchored_cell, direction] of Array.from(this.anchored_cells)) {
-      anchor = {
-        'x': anchored_cell.x + anchored_cell.jelly.x,
-        'y': anchored_cell.y + anchored_cell.jelly.y,
-        'dir': direction
-      };
-      anchors.push(anchor);
-    }
-
-    // Add delayed anchors that aren't attached yet
-    for ([anchor, other] of Array.from(this.delayed_anchors)) {
-      let new_anchor = anchor;
-      if (!(other instanceof Wall)) {
-        new_anchor = {
-          'x': (other.x + other.jelly.x) - directions[anchor.dir].x,
-          'y': (other.y + other.jelly.y) - directions[anchor.dir].y,
-          'dir': anchor.dir
-        };
-      }
-      new_anchor.delayed = true;
-      anchors.push(new_anchor);
-    }
-    return anchors;
-  }
-
-  saveForUndoGrowers() {
-    const growers = [];
-    // Add growers that weren't activated yet,
-    // otherwise they are simple cells already listed
-    for (let [cell, grower, grower_div] of Array.from(this.growers)) {
-      let new_y = grower.y;
-      let new_x = grower.x;
-      if (!(cell instanceof Wall)) {
-        new_y = cell.y + cell.jelly.y;
-        new_x = cell.x + cell.jelly.x;
-      }
-      const new_grower = {
-        'x':new_x,
-        'y':new_y,
-        'dir':grower.dir,
-        'color':grower.color
-      };
-      growers.push(new_grower);
-    }
-    return growers;
-  }
-}
-
-class Wall {
-  constructor(dom) {
-    this.dom = dom;
-  }
-}
-
-class JellyCell {
-  constructor(color) {
-    this.color = color;
-    this.dom = document.createElement('div');
-    this.dom.className = `cell jelly ${color}`;
-    this.x = 0;
-    this.y = 0;
-    this.color_master = this;
-    this.color_mates = [this];
-  }
-
-  mergeWith(other, dir) {
-    const borders = {
-      'left':  ['borderLeft',   'borderRight'],
-      'right': ['borderRight',  'borderLeft'],
-      'up':    ['borderTop',    'borderBottom'],
-      'down':  ['borderBottom', 'borderTop']
-    };
-    // Remove internal borders, whether merging with other jelly or wall.
-    this.dom.style[borders[dir][0]] = 'none';
-    other.dom.style[borders[dir][1]] = 'none';
-
-    // If merging with wall, jelly becomes immovable.
-    if (other instanceof Wall) { this.jelly.immovable = true; }
-
-    // If merging with jelly, unify the jellies and color mates' lists.
-    if (other instanceof JellyCell && (this.color === other.color) && (this.color_master !== other.color_master)) {
-      const other_master = other.color_master;
-      for (let cell of Array.from(other_master.color_mates)) {
-        cell.color_master = this.color_master;
-      }
-      this.color_master.color_mates =
-        this.color_master.color_mates.concat(other_master.color_mates);
-    }
-    if (other instanceof JellyCell && (this.jelly !== other.jelly)) {
-      return this.jelly.merge(other.jelly);
-    }
-  }
-}
-
-class Jelly {
-  constructor(stage, cell, x, y) {
-    this.x = x;
-    this.y = y;
-    this.dom = document.createElement('div');
-    this.updatePosition(this.x, this.y);
-    this.dom.className = 'cell jellybox';
-    cell.jelly = this;
-    this.cells = [cell];
-    this.dom.appendChild(cell.dom);
-
-    this.dom.addEventListener('contextmenu', e => {
-      return stage.trySlide(this, 1);
-    });
-    this.dom.addEventListener('click', e => {
-      return stage.trySlide(this, -1);
-    });
-
-    this.dom.addEventListener('touchstart', e => {
-      return this.start = e.touches[0].pageX;
-    });
-    this.dom.addEventListener('touchmove', e => {
-      const dx = e.touches[0].pageX - this.start;
-      if (Math.abs(dx) > 10) {
-        let left;
-        const dir = (left = dx > 0) != null ? left : {1 : -1};
-        return stage.trySlide(this, dir);
-      }
-    });
-    this.dom.addEventListener('mouseover', e => {
-      return stage.current_cell = this;
-    });
-    this.immovable = false;
-  }
-
-  cellCoords() {
-    return Array.from(this.cells).map((cell) => [this.x + cell.x, this.y + cell.y, cell]);
-  }
-
-  updatePosition(x, y) {
-    this.x = x;
-    this.y = y;
-    return moveToCell(this.dom, this.x, this.y);
-  }
-
-  merge(other) {
-    // Reposition other's cells as children of this jelly.
-    const dx = other.x - this.x;
-    const dy = other.y - this.y;
-    for (let cell of Array.from(other.cells)) {
-      this.cells.push(cell);
-      cell.x += dx;
-      cell.y += dy;
-      cell.jelly = this;
-      moveToCell(cell.dom, cell.x, cell.y);
-      this.dom.appendChild(cell.dom);
-    }
-
-    if (other.immovable) { this.immovable = true; }
-    // Delete references from/to other.
-    other.cells = null;
-    other.dom.parentNode.removeChild(other.dom);
-  }
-}
 
 const level = parseInt(location.search.substr(1), 10) || 1;
 let stage = new Stage(document.getElementById('map'), levels[level-1]);
