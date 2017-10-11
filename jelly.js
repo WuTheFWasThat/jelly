@@ -31,6 +31,36 @@ const style_colors = {
   'yellow': 'hsl(60,  100%, 50%)'
 };
 
+function parseColor(cellval) {
+  switch (cellval) {
+    case 'r': return 'red';
+    case 'g': return 'green';
+    case 'b': return 'blue';
+    case 'y': return 'yellow';
+    case '0':case '1':case '2':case '3':case '4':case '5':case '6':case '7':case '8':case '9':
+      return `black${cellval}`;
+  }
+  throw new Error(`Unexpected cell val ${cellval}`);
+}
+
+function parseCellsFromMap(map) {
+  const cells = [];
+  const jellies = [];
+
+  return map.map((row) => {
+    return row.split('').map((x) => {
+      let cell = null;
+      if (x === 'x') {
+        return new Wall();
+      } else if (x !== ' ') {
+        return new JellyCell(parseColor(x))
+      } else {
+        return null;
+      }
+    });
+  });
+}
+
 class Stage {
   constructor(dom, map) {
     this.dom = dom;
