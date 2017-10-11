@@ -33,23 +33,17 @@ const style_colors = {
 
 class Stage {
   constructor(dom, map) {
-    let anchors, growers;
     this.dom = dom;
     this.jellies = [];
     this.history = [];
     this.anchored_cells = [];
     this.growers = [];
     this.delayed_anchors = [];
-    if (map[0] instanceof Array) {
-      growers = map[2];
-      anchors = map[1];
-      map = map[0];
-    }
     this.num_monochromatic_blocks = 0;
     this.num_colors = 0;
-    this.loadMap(map);
-    if (anchors) { this.placeAnchors(anchors, growers); }
-    if (growers) { this.placeGrowers(growers); }
+    this.loadMap(map.map);
+    if (map.anchors) { this.placeAnchors(map.anchors, map.growers); }
+    if (map.growers) { this.placeGrowers(map.growers); }
     this.current_cell = null;
 
     // Capture and swallow all click events during animations.
@@ -242,27 +236,31 @@ class Stage {
   }
 
   waitForAnimation(cb) {
-    let name;
     const names = ['transitionend', 'webkitTransitionEnd'];
-    var end = () => {
-      for (name of Array.from(names)) { this.dom.removeEventListener(name, end); }
-      // Wait one call stack before continuing.  This is necessary if there
-      // are multiple pending end transition events (multiple jellies moving);
-      // we want to wait for them all here and not accidentally catch them
-      // in a subsequent waitForAnimation.
-      return setTimeout(cb, 0);
-    };
-    for (name of Array.from(names)) { this.dom.addEventListener(name, end); }
+    names.forEach((name) => {
+      const end = () => {
+        this.dom.removeEventListener(name, end);
+
+        // Wait one call stack before continuing.  This is necessary if there
+        // are multiple pending end transition events (multiple jellies moving);
+        // we want to wait for them all here and not accidentally catch them
+        // in a subsequent waitForAnimation.
+        return setTimeout(cb, 0);
+      };
+      this.dom.addEventListener(name, end);
+    });
   }
 
   trySlide(jelly, dir) {
     if (!jelly) { return; }
     const jellies = [jelly];
-    if (this.checkFilled(jellies, dir, 0)) { return; }
+    if (this.checkFilled(jellies, dir, 0)) {
+      return;
+    }
     this.busy = true;
     this.saveForUndo();
     this.move(jellies, dir, 0);
-    return this.waitForAnimation(() => {
+    this.waitForAnimation(() => {
       return this.checkFall(() => {
         this.checkForMerges();
         return this.checkForGrows();
@@ -346,8 +344,7 @@ class Stage {
     if (this.doOneGrow()) {
       setTimeout(() => {
         return this.checkForGrows();
-      }
-      , 200);
+      }, 200);
     } else {
       this.busy = false;
     }
@@ -608,10 +605,10 @@ class Jelly {
     this.dom.appendChild(cell.dom);
 
     this.dom.addEventListener('contextmenu', e => {
-      return stage.trySlide(this, 1);
+      stage.trySlide(this, 1);
     });
     this.dom.addEventListener('click', e => {
-      return stage.trySlide(this, -1);
+      stage.trySlide(this, -1);
     });
 
     this.dom.addEventListener('touchstart', e => {
@@ -622,7 +619,7 @@ class Jelly {
       if (Math.abs(dx) > 10) {
         let left;
         const dir = (left = dx > 0) != null ? left : {1 : -1};
-        return stage.trySlide(this, dir);
+        stage.trySlide(this, dir);
       }
     });
     this.dom.addEventListener('mouseover', e => {
@@ -662,66 +659,88 @@ class Jelly {
 }
 
 const levels = [
-  // Level 1
-  [ "xxxxxxxxxxxxxx",
-    "x            x",
-    "x            x",
-    "x      r     x",
-    "x      xx    x",
-    "x  g     r b x",
-    "xxbxxxg xxxxxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 1
+    map: [
+      "xxxxxxxxxxxxxx",
+      "x            x",
+      "x            x",
+      "x      r     x",
+      "x      xx    x",
+      "x  g     r b x",
+      "xxbxxxg xxxxxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
-  [ "xxxxxxxxxxxxxx",
-    "x            x",
-    "x            x",
-    "x            x",
-    "x     g   g  x",
-    "x   r r   r  x",
-    "xxxxx x x xxxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 2
+    map: [
+      "xxxxxxxxxxxxxx",
+      "x            x",
+      "x            x",
+      "x            x",
+      "x     g   g  x",
+      "x   r r   r  x",
+      "xxxxx x x xxxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
-  [ "xxxxxxxxxxxxxx",
-    "x            x",
-    "x            x",
-    "x   bg  x g  x",
-    "xxx xxxrxxx  x",
-    "x      b     x",
-    "xxx xxxrxxxxxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 3
+    map: [
+      "xxxxxxxxxxxxxx",
+      "x            x",
+      "x            x",
+      "x   bg  x g  x",
+      "xxx xxxrxxx  x",
+      "x      b     x",
+      "xxx xxxrxxxxxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
-  [ "xxxxxxxxxxxxxx",
-    "x            x",
-    "x       r    x",
-    "x       b    x",
-    "x       x    x",
-    "x b r        x",
-    "x b r      b x",
-    "xxx x      xxx",
-    "xxxxx xxxxxxxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 4
+    map: [
+      "xxxxxxxxxxxxxx",
+      "x            x",
+      "x       r    x",
+      "x       b    x",
+      "x       x    x",
+      "x b r        x",
+      "x b r      b x",
+      "xxx x      xxx",
+      "xxxxx xxxxxxxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
-  // Level 5
-  [ "xxxxxxxxxxxxxx",
-    "x            x",
-    "x            x",
-    "xrg  gg      x",
-    "xxx xxxx xx  x",
-    "xrg          x",
-    "xxxxx  xx   xx",
-    "xxxxxx xx  xxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 5
+    map: [
+      "xxxxxxxxxxxxxx",
+      "x            x",
+      "x            x",
+      "xrg  gg      x",
+      "xxx xxxx xx  x",
+      "xrg          x",
+      "xxxxx  xx   xx",
+      "xxxxxx xx  xxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
-  [ "xxxxxxxxxxxxxx",
-    "xxxxxxx      x",
-    "xxxxxxx g    x",
-    "x       xx   x",
-    "x r   b      x",
-    "x x xxx x g  x",
-    "x         x bx",
-    "x       r xxxx",
-    "x   xxxxxxxxxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 6
+    map: [
+      "xxxxxxxxxxxxxx",
+      "xxxxxxx      x",
+      "xxxxxxx g    x",
+      "x       xx   x",
+      "x r   b      x",
+      "x x xxx x g  x",
+      "x         x bx",
+      "x       r xxxx",
+      "x   xxxxxxxxxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
   // Anchored jellies are specified separately after the
   // level map. Instead of [row, row, row...in the presence of
@@ -729,7 +748,9 @@ const levels = [
   // [ [row,row,row...], [ anchor, anchor, anchor...] ].
   // Each anchor starts from a colored non-black jelly's
   // coordinates and specifies the direction in which it's "held".
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 7
+    map: [
+      "xxxxxxxxxxxxxx",
       "x            x",
       "x          r x",
       "x          x x",
@@ -738,14 +759,17 @@ const levels = [
       "x         x  x",
       "x r  bx x x  x",
       "x x  xx x x  x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:2, y:7, dir:'down' },
       { x:5, y:7, dir:'down' },
-    ]
-  ],
+    ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 8
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxx x  x xxxx",
       "xxx  g  b  xxx",
       "xx   x  x   xx",
@@ -753,28 +777,33 @@ const levels = [
       "xxg        bxx",
       "xxxg      bxxx",
       "xxxx      xxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:5, y:4, dir:'up' },
       { x:8, y:4, dir:'up' },
     ]
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 9
+    map: [
+      "xxxxxxxxxxxxxx",
       "x            x",
       "x            x",
       "x          rbx",
       "x    x     xxx",
       "xb        00xx",
       "xx  rx  x xxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:4, y:6, dir:'down' },
     ],
-  ],
+  },
 
-  // Level 10
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 10
+    map: [
+      "xxxxxxxxxxxxxx",
       "x   gr       x",
       "x   00 1     x",
       "x    x x xxxxx",
@@ -783,14 +812,17 @@ const levels = [
       "x        x  rx",
       "xx   x     gxx",
       "x          xxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:11, y:7, dir:'down' },
       { x:12, y:6, dir:'down' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 11
+    map: [
+      "xxxxxxxxxxxxxx",
       "x      g00g gx",
       "x       xxx xx",
       "x           gx",
@@ -799,15 +831,18 @@ const levels = [
       "x       g    x",
       "x   x xxx   gx",
       "x   xxxxxx xxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:12, y:7, dir:'down' },
       { x:7, y:1, dir:'right' },
       { x:10, y:1, dir:'left' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 12
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxr rr  rr rxx",
       "xxx  x  x  xxx",
       "x            x",
@@ -816,22 +851,29 @@ const levels = [
       "x            x",
       "x            x",
       "x   xxxxxx   x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:12, y:4, dir:'down' },
     ],
-  ],
+  },
 
-  [ "xxxxxxxxxxxxxx",
-    "xxxxxxxxxxxxxx",
-    "xxxxx gr xxxxx",
-    "xxxxx rb xxxxx",
-    "xxxxx gr xxxxx",
-    "xxxxx bg xxxxx",
-    "xxxxxxxxxxxxxx",
-    "xxxxxxxxxxxxxx", ],
+  { // Level 13
+    map: [
+      "xxxxxxxxxxxxxx",
+      "xxxxxxxxxxxxxx",
+      "xxxxx gr xxxxx",
+      "xxxxx rb xxxxx",
+      "xxxxx gr xxxxx",
+      "xxxxx bg xxxxx",
+      "xxxxxxxxxxxxxx",
+      "xxxxxxxxxxxxxx",
+    ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 14
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxxxxxxx   rx",
       "xxxxxxxxx   gx",
       "xxxxxxxxx   gx",
@@ -840,15 +882,17 @@ const levels = [
       "x0033      xxx",
       "x0033      xxx",
       "xxr x gxxx xxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:2, y:8, dir:'down' },
       { x:6, y:8, dir:'down' },
     ],
-  ],
+  },
 
-  // Level 15
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 15
+    map: [
+      "xxxxxxxxxxxxxx",
       "xr r r      rx",
       "xg x x      gx",
       "xb          bx",
@@ -857,15 +901,18 @@ const levels = [
       "xxxxxx   xxxxx",
       "xxxxxx   xxxxx",
       "xxxxxxgggxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:3, dir:'down' },
       { x:6, y:8, dir:'left' },
       { x:8, y:8, dir:'right' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 16
+    map: [
+      "xxxxxxxxxxxxxx",
       "xx   0001233rx",
       "xx   0411233xx",
       "xx   444122xxx",
@@ -874,13 +921,16 @@ const levels = [
       "xx     xxxxxxx",
       "xx     xxxxxxx",
       "xx     xxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:5, dir:'up' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 17
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxx000xxxgb x",
       "xxxx0     bg x",
       "xxxx0    11xxx",
@@ -889,14 +939,17 @@ const levels = [
       "xxxx     xxgxx",
       "xxxx   g    bx",
       "xxxx   x     x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:11, y:6, dir:'up' },
       { x:12, y:7, dir:'up' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 18
+    map: [
+      "xxxxxxxxxxxxxx",
       "x            x",
       "xb01         x",
       "xb0gg     g  x",
@@ -905,13 +958,16 @@ const levels = [
       "xxxxx gg  xxxx",
       "xxxxx ggg xxxx",
       "xxxxx ggggxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:12, y:4, dir:'down' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 19
+    map: [
+      "xxxxxxxxxxxxxx",
       "xg0    g1gx  x",
       "x 3g    1 x  x",
       "x444    2 x  x",
@@ -920,8 +976,9 @@ const levels = [
       "xxx     xxx  x",
       "xxx     xxx  x",
       "xxx          x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:1, dir:'right' },
       { x:3, y:2, dir:'left' },
       { x:1, y:4, dir:'up' },
@@ -930,10 +987,11 @@ const levels = [
       { x:7, y:1, dir:'right' },
       { x:9, y:1, dir:'left' },
     ],
-  ],
+  },
 
-  // Level 20
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 20
+    map: [
+      "xxxxxxxxxxxxxx",
       "xrrrr   rggxxx",
       "xxxb    xxxxxx",
       "xxxx       xbx",
@@ -942,11 +1000,12 @@ const levels = [
       "xx     x     x",
       "xx x         x",
       "xx        x  x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:12, y:3, dir:'up' },
     ],
-  ],
+  },
 
   // "Growers" are a new type of jelly that need to be
   // interacted with before they appear on the map.
@@ -956,7 +1015,9 @@ const levels = [
   // "No touching! No touching!"
   // We use a format similar to anchored jellies and
   // specify coordinates, direction and color of the new spawn.
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 21
+    map: [
+      "xxxxxxxxxxxxxx",
       "x      x     x",
       "x      x     x",
       "x      x     x",
@@ -965,17 +1026,19 @@ const levels = [
       "xxxx     xx  x",
       "xxxr b     r x",
       "xxxx xxxxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:7, y:4, dir:'up' },
     ],
-    [
+    growers: [
       { x:7, y:8, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 22
+    map: [
+      "xxxxxxxxxxxxxx",
       "x            x",
       "x            x",
       "x            x",
@@ -984,16 +1047,19 @@ const levels = [
       "x x xx  xxx xx",
       "xbx          x",
       "xxxxxxxxxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:6, y:7, dir:'down' },
     ],
-    [
+    growers: [
       { x:6, y:8, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 23
+    map: [
+      "xxxxxxxxxxxxxx",
       "x            x",
       "x            x",
       "x    g       x",
@@ -1002,15 +1068,16 @@ const levels = [
       "x        xx  x",
       "x b          x",
       "xxxx r xxx xgx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
     ],
-    [
+    growers: [
       { x:8, y:8, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 24
+    map: [
+      "xxxxxxxxxxxxxx",
       "xg   b     xxx",
       "xr   g     xxx",
       "xy   b y   yxx",
@@ -1019,20 +1086,22 @@ const levels = [
       "xxxx       xxx",
       "xxxxxx xxxxxxx",
       "xxxxxxgxxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:3, dir:'down' },
       { x:6, y:8, dir:'down' },
       { x:9, y:6, dir:'down' },
     ],
-    [
+    growers: [
       { x:4, y:7, dir:'up', color:'green' },
       { x:9, y:7, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  // Level 25
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 25
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxxxxxx  x  x",
       "xxxxxxxx  r  x",
       "xxxxxxxx     x",
@@ -1041,18 +1110,21 @@ const levels = [
       "x 111    222 x",
       "x g        x x",
       "xxxxxxxxxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:10, y:2, dir:'up' },
     ],
-    [
+    growers: [
       { x:4, y:8, dir:'up', color:'green' },
       { x:7, y:8, dir:'up', color:'green' },
       { x:10, y:8, dir:'up', color:'green' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 26
+    map: [
+      "xxxxxxxxxxxxxx",
       "xx        xxxx",
       "xx  r     xxxx",
       "xx11111111xxxx",
@@ -1061,18 +1133,19 @@ const levels = [
       "xx  r      xxx",
       "xx33333333xxxx",
       "xx     r  xxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
     ],
-    [
+    growers: [
       { x:7, y:3, dir:'up', color:'red' },
       { x:4, y:5, dir:'up', color:'red' },
       { x:7, y:7, dir:'up', color:'red' },
       { x:4, y:9, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 27
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxxxgxyxrxxxx",
       "xxxxx     xxxx",
       "xbyg2     r  x",
@@ -1081,20 +1154,23 @@ const levels = [
       "xxxxx11111 x x",
       "xxxx 11111bx x",
       "xxxx   b     x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:5, y:1, dir:'up' },
       { x:7, y:1, dir:'up' },
       { x:9, y:1, dir:'up' },
       { x:10, y:7, dir:'left' },
     ],
-    [
+    growers: [
       { x:6, y:9, dir:'up', color:'blue' },
       { x:8, y:9, dir:'up', color:'blue' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 28
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxx x  x xxxx",
       "xxx gb  gb xxx",
       "xx  xx  xx  xx",
@@ -1103,32 +1179,38 @@ const levels = [
       "xxx        xxx",
       "xxxxg    bxxxx",
       "xxxxxxxxxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:5, y:4, dir:'up' },
       { x:8, y:4, dir:'up' },
       { x:5, y:7, dir:'down' },
       { x:8, y:7, dir:'down' },
     ],
-    [
+    growers: [
       { x:5, y:8, dir:'up', color:'blue' },
       { x:8, y:8, dir:'up', color:'green' },
     ],
-  ],
+  },
 
-  [  "xxxxxxxxxxxxxx",
-     "xxxx yyrr xxxx",
-     "xxxx yyrr xxxx",
-     "xxx  bbgg  xxx",
-     "xxx  bbgg  xxx",
-     "xxx  ggbb  xxx",
-     "xxx  ggbb  xxx",
-     "xxxx rryy xxxx",
-     "xxxx rryy xxxx",
-     "xxxxxxxxxxxxxx", ],
+  { // Level 29
+    map: [
+      "xxxxxxxxxxxxxx",
+      "xxxx yyrr xxxx",
+      "xxxx yyrr xxxx",
+      "xxx  bbgg  xxx",
+      "xxx  bbgg  xxx",
+      "xxx  ggbb  xxx",
+      "xxx  ggbb  xxx",
+      "xxxx rryy xxxx",
+      "xxxx rryy xxxx",
+      "xxxxxxxxxxxxxx"
+    ],
+  },
 
-  // Level 30
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 30
+    map: [
+      "xxxxxxxxxxxxxx",
       "xr    xxxxxxxx",
       "xxx        xxx",
       "xxxx       xxx",
@@ -1137,11 +1219,12 @@ const levels = [
       "xxxx       xxx",
       "xrrr       xxx",
       "xxr        bxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:1, dir:'up' },
     ],
-    [
+    growers: [
       { x:5, y:9, dir:'up', color:'blue' },
       { x:6, y:9, dir:'up', color:'blue' },
       { x:7, y:9, dir:'up', color:'blue' },
@@ -1155,9 +1238,11 @@ const levels = [
       { x:11, y:3, dir:'left', color:'blue' },
       { x:11, y:2, dir:'left', color:'blue' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 31
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxb xxxxxx bxx",
       "xxx  r  r  xxx",
       "xx   xxxx   xx",
@@ -1166,22 +1251,25 @@ const levels = [
       "xx11      22xx",
       "xx11      22xx",
       "xxxxxr  rxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:5, y:8, dir:'down' },
       { x:8, y:8, dir:'down' },
       { x:4, y:6, dir:'left' },
       { x:9, y:6, dir:'right' },
     ],
-    [
+    growers: [
       { x:3, y:6, dir:'right', color:'green' },
       { x:10, y:6, dir:'left', color:'green' },
       { x:2, y:2, dir:'right', color:'blue' },
       { x:11, y:2, dir:'left', color:'blue' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 32
+    map: [
+      "xxxxxxxxxxxxxx",
       "xg   y   xr0bx",
       "x1   2    y3gx",
       "xb   r44    xx",
@@ -1190,8 +1278,9 @@ const levels = [
       "x       xx  xx",
       "xx          xx",
       "xxx        xxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:1, dir:'down' },
       { x:1, y:3, dir:'up' },
       { x:5, y:1, dir:'down' },
@@ -1201,9 +1290,11 @@ const levels = [
       { x:10, y:2, dir:'right' },
       { x:12, y:2, dir:'left' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 33
+    map: [
+      "xxxxxxxxxxxxxx",
       "xx1144    xxxx",
       "xr1224    xxxx",
       "xx3225    xxxx",
@@ -1212,16 +1303,19 @@ const levels = [
       "xx           x",
       "xxx          x",
       "xx     xx  x x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:12, y:5, dir:'up' },
     ],
-    [
+    growers: [
       { x:1, y:6, dir:'right', color:'red' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 34
+    map: [
+      "xxxxxxxxxxxxxx",
       "xb      r12rxx",
       "xx      1122 x",
       "xx      3344xx",
@@ -1230,8 +1324,9 @@ const levels = [
       "xx     gxxxxxx",
       "xx     xxxxxxx",
       "xx     xxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:4, dir:'left' },
       { x:8, y:1, dir:'right' },
       { x:8, y:1, dir:'down' },
@@ -1242,15 +1337,16 @@ const levels = [
       { x:11, y:4, dir:'left' },
       { x:11, y:4, dir:'up' },
     ],
-    [
+    growers: [
       { x:0, y:4, dir:'right', color:'blue' },
       { x:13, y:2, dir:'left', color:'blue' },
       { x:4, y:9, dir:'up', color:'green' },
     ],
-  ],
+  },
 
-  // Level 35
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 35
+    map: [
+      "xxxxxxxxxxxxxx",
       "x00    bbbbbrx",
       "x0b        byx",
       "x00        byx",
@@ -1259,8 +1355,9 @@ const levels = [
       "xx 111     xxx",
       "xxxxx      xxx",
       "xxxxxxxx   xxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:2, y:2, dir:'left' },
       { x:2, y:2, dir:'up' },
       { x:2, y:2, dir:'down' },
@@ -1269,9 +1366,11 @@ const levels = [
       { x:4, y:5, dir:'left' },
       { x:4, y:5, dir:'right' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 36
+    map: [
+      "xxxxxxxxxxxxxx",
       "x    brgrbg  x",
       "x  xx111111xxx",
       "x  xx1y11r1xxx",
@@ -1280,15 +1379,16 @@ const levels = [
       "x    222222  x",
       "x    222222  x",
       "x    222222  x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
     ],
-    [
+    growers: [
       { x:4, y:9, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 37
+    map: [
+      "xxxxxxxxxxxxxx",
       "xrr  rrr  rryx",
       "xxx    x   xxx",
       "x           gx",
@@ -1297,17 +1397,20 @@ const levels = [
       "xxx 1        x",
       "xx  1        x",
       "xxx 1       xx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:12, y:4, dir:'right' },
     ],
-    [
+    growers: [
       { x:0, y:3, dir:'right', color:'yellow' },
       { x:0, y:4, dir:'right', color:'green' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 38
+    map: [
+      "xxxxxxxxxxxxxx",
       "xgggxxybr    x",
       "x   xxbyb    x",
       "xgggxxxxxxx  x",
@@ -1316,8 +1419,9 @@ const levels = [
       "xx      xx xxx",
       "xx       xxxxx",
       "xxxxx xxxxxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:1, y:1, dir:'up' },
       { x:2, y:1, dir:'up' },
       { x:3, y:1, dir:'up' },
@@ -1325,12 +1429,14 @@ const levels = [
       { x:2, y:3, dir:'down' },
       { x:3, y:3, dir:'down' },
     ],
-    [
+    growers: [
       { x:2, y:8, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 39
+    map: [
+      "xxxxxxxxxxxxxx",
       "xxxxx    xxxxx",
       "xxxx  1111xxxx",
       "xxxxx    xxxxx",
@@ -1339,17 +1445,17 @@ const levels = [
       "xyr        gyx",
       "xxxx      xxxx",
       "xxxxx xx xxxxx",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
     ],
-    [
+    growers: [
       { x:3, y:7, dir:'up', color:'green' },
       { x:10, y:7, dir:'up', color:'red' },
     ],
-  ],
+  },
 
-  // Level 40
-  [ [ "xxxxxxxxxxxxxx",
+  { // Level 40
+    map: [
+      "xxxxxxxxxxxxxx",
       "x      r r r x",
       "xx1yxxxx x x x",
       "xx11r  x x r x",
@@ -1358,16 +1464,16 @@ const levels = [
       "xx22       x x",
       "xx2          x",
       "xxxx     x   x",
-      "xxxxxxxxxxxxxx", ],
-    [
+      "xxxxxxxxxxxxxx",
+    ],
+    anchors: [
       { x:4, y:3, dir:'up' },
     ],
-    [
+    growers: [
       { x:3, y:8, dir:'up', color:'yellow' },
     ],
-  ],
-
-  ];
+  },
+];
 
 
 const level = parseInt(location.search.substr(1), 10) || 1;
