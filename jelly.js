@@ -125,10 +125,10 @@ class Stage {
 
   placeAnchors(anchors, growers) {
     const style = {
-      'left' : [ 'leftarrow' , 'borderRightColor'  ],
-      'right': [ 'rightarrow', 'borderLeftColor'   ],
-      'up'   : [ 'uparrow'   , 'borderBottomColor' ],
-      'down' : [ 'downarrow' , 'borderTopColor'    ],
+      'left' : [ 'arrow leftarrow' , 'borderRightColor'  ],
+      'right': [ 'arrow rightarrow', 'borderLeftColor'   ],
+      'up'   : [ 'arrow uparrow'   , 'borderBottomColor' ],
+      'down' : [ 'arrow downarrow' , 'borderTopColor'    ],
     };
 
     for (let anchor of Array.from(anchors)) {
@@ -173,9 +173,9 @@ class Stage {
 
   placeGrowers(growers) {
     const style = {
-      'left' : [ 'leftgrower' , 'borderLeftColor'   ],
-      'right': [ 'rightgrower', 'borderRightColor'  ],
-      'up'   : [ 'upgrower'   , 'borderTopColor'    ],
+      'left' : [ 'grower leftgrower' , 'borderLeftColor'   ],
+      'right': [ 'grower rightgrower', 'borderRightColor'  ],
+      'up'   : [ 'grower upgrower'   , 'borderTopColor'    ],
     };
 
     for (let grower of Array.from(growers)) {
